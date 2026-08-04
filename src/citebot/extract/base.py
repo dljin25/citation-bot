@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from src.models import Reference
+from citebot.models import Reference
 
 
 class Extractor(Protocol):

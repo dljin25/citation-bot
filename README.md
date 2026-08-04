@@ -16,7 +16,7 @@ pip install -e .
 citebot extract 1706.03762
 ```
 
-Each `Reference` (defined in [`src/models.py`](src/models.py)) carries the raw
+Each `Reference` (defined in [`src/citebot/models/__init__.py`](src/citebot/models/__init__.py)) carries the raw
 citation string, parsed title/authors/year/venue, extracted identifiers
 (DOI/arXiv id/URL), and the extraction source + confidence.
 

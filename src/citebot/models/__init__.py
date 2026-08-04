@@ -27,7 +27,5 @@ class Reference(BaseModel):
     title: Optional[str] = None
     authors: list[str] = Field(default_factory=list)  # surname-leading display names
     year: Optional[int] = None
-    venue: Optional[str] = None
     identifiers: Identifiers = Field(default_factory=Identifiers)
     source: ExtractionSource = ExtractionSource.BBL
-    extraction_confidence: float = 1.0  # 0..1, parser's confidence in the fields

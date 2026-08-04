@@ -1,117 +1,18 @@
-"""Extract references from an arXiv paper's compiled .bbl.
+"""Parse .bbl bibliography text into Reference objects.
 
-Strategy:
-  1. Download the e-print source tarball.
-  2. Locate the compiled ``.bbl`` file(s). If none exist (some sources embed
-     the bibliography directly in a ``.tex`` file instead of a compiled
-     ``.bbl``), fall back to any ``\\begin{thebibliography}`` block found in
-     the ``.tex`` sources.
-  3. Parse it. Two .bbl dialects are handled: classic natbib/plain
-     (``\\bibitem`` + ``\\newblock``) and biblatex (``\\entry`` + ``\\field``).
-
+Two .bbl dialects are handled: classic natbib/plain (\\bibitem + \\newblock)
+and biblatex (\\entry + \\field). Callers (e.g. citebot.extract.arxiv) are
+responsible for locating and fetching the raw .bbl text; this module only
+turns that text into structured references.
 """
 
 from __future__ import annotations
 
-import io
 import re
-import tarfile
 from typing import Optional
 
-import httpx
-
-from src.extract import normalize as N
-# from src.extract import style  # only needed by the commented-out style-detection code below
-from src.models import ExtractionSource, Identifiers, Reference
-
-ARXIV_EPRINT = "https://arxiv.org/e-print/{id}"
-_USER_AGENT = "citebot/0.1 (research-integrity tool; mailto:davidjin684@gmail.com)"
-
-# --------------------------------------------------------------------------- #
-# Download from ARXIV_EPRINT
-# --------------------------------------------------------------------------- #
-
-def fetch_source_files(arxiv_id: str, *, timeout: float = 60.0) -> dict[str, str]:
-    """Return {filename: text} for all text-ish files in the e-print source."""
-    url = ARXIV_EPRINT.format(id=arxiv_id)
-    try:
-        with httpx.Client(follow_redirects=True, timeout=timeout,
-                          headers={"User-Agent": _USER_AGENT}) as client:
-            resp = client.get(url)
-            resp.raise_for_status()
-            data = resp.content
-
-    # failure modes
-    except httpx.HTTPStatusError as e:
-        if e.response.status_code == 404:
-            raise ValueError(
-                f"No arXiv paper found for id '{arxiv_id}' (404)."
-            ) from e
-        raise ValueError(
-            f"arXiv returned {e.response.status_code} fetching '{arxiv_id}'."
-        ) from e
-    except httpx.RequestError as e:
-        raise ValueError(f"Could not reach arXiv to fetch '{arxiv_id}': {e}") from e
-    
-    return _unpack(data)
-
-
-_TEX_BIBLIOGRAPHY_RE = re.compile(r"\\begin\{thebibliography\}.*?\\end\{thebibliography\}", re.DOTALL)
-
-
-def _unpack(data: bytes) -> dict[str, str]: # Ex. data = b'\x1f\x8b\x08...'
-    bbl_files: dict[str, str] = {}
-    tex_files: dict[str, str] = {}
-
-    # tar.gz
-    try:
-        with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
-            for member in tar.getmembers():
-                if not member.isfile():
-                    continue
-                name = member.name.lower()
-                if not (name.endswith(".bbl") or name.endswith(".tex")):
-                    continue
-                f = tar.extractfile(member)
-                if f is None:
-                    continue
-                text = _decode(f.read())
-                if name.endswith(".bbl"):
-                    bbl_files[member.name] = text
-                else:
-                    tex_files[member.name] = text
-    except tarfile.TarError:
-        pass
-
-    if bbl_files:
-        return bbl_files
-
-    # No compiled .bbl shipped with the source — some papers embed the
-    # bibliography directly in a .tex file instead.
-    inline: dict[str, str] = {}
-    for name, text in tex_files.items():
-        m = _TEX_BIBLIOGRAPHY_RE.search(text)
-        if m:
-            inline[name] = m.group(0)
-    return inline
-
-
-def _decode(b: bytes) -> str:
-    for enc in ("utf-8", "latin-1"):
-        try:
-            return b.decode(enc)
-        except UnicodeDecodeError:
-            continue
-    return b.decode("utf-8", errors="replace")
-
-
-# --------------------------------------------------------------------------- #
-# Locate bibliography content
-# --------------------------------------------------------------------------- #
-def _select_bibliography(files: dict[str, str]) -> str:
-    """Return the concatenated text of all .bbl files, or '' if none."""
-    return "\n".join(files.values())
-
+from citebot.models import ExtractionSource, Identifiers, Reference
+from citebot.parse import normalize as N
 
 # --------------------------------------------------------------------------- #
 # Parsers
@@ -127,31 +28,28 @@ def _ident_from(raw: str) -> Identifiers:
 def parse_bibitems(text: str) -> list[Reference]:
     """Classic natbib/plain .bbl: \\bibitem[label]{key} blocks split by \\newblock."""
     refs: list[Reference] = []
+
     # split into bibitem blocks
     chunks = re.split(r"\\bibitem", text)
+
     idx = 0
-    for chunk in chunks[1:]:
-        # strip the [label] and {key}
+    for chunk in chunks[1:]: # ignore chunks[0] preamble
         m = re.match(r"\s*(?:\[[^\]]*\])?\s*\{([^}]*)\}", chunk)
         key = m.group(1) if m else f"ref{idx + 1}"
         body = chunk[m.end():] if m else chunk
-        body = body.split("\\bibitem")[0]
         raw = N.strip_latex(body)
         if not raw:
             continue
         idx += 1
 
         blocks = [b.strip() for b in re.split(r"\\newblock", body) if b.strip()]
-        title = author = venue = None
+        title = author = None
         if len(blocks) >= 2:
             author = blocks[0]
             title = N.clean_title(blocks[1])
-            if len(blocks) >= 3:
-                venue = N.strip_latex(blocks[2]) or None
             authors = N.parse_authors(author)
         else:
             authors = N.parse_authors(blocks[0]) if blocks else []
-        confidence = 0.9 if (title and authors) else 0.4
 
         refs.append(Reference(
             ref_id=key,
@@ -159,10 +57,8 @@ def parse_bibitems(text: str) -> list[Reference]:
             title=title,
             authors=authors,
             year=N.extract_year(raw),
-            venue=venue,
             identifiers=_ident_from(body),
             source=ExtractionSource.BBL,
-            extraction_confidence=confidence,
         ))
     return refs
 
@@ -180,6 +76,7 @@ def parse_biblatex_bbl(text: str) -> list[Reference]:
             return N.strip_latex(m.group(1)) if m else None
 
         title = N.clean_title(field("title") or "")
+        # not a Reference field; kept only to reconstruct raw_string below
         venue = field("journaltitle") or field("booktitle") or field("eventtitle")
         year = field("year")
         if not year:
@@ -206,17 +103,14 @@ def parse_biblatex_bbl(text: str) -> list[Reference]:
             arxiv_id=eprint if (eprint and re.match(r"\d{4}\.\d{4,5}", eprint)) else N.extract_arxiv_id(body),
             url=field("url") or N.extract_url(body),
         )
-        confidence = 0.95 if (title and authors) else 0.5
         refs.append(Reference(
             ref_id=key,
             raw_string=raw or (title or key),
             title=title,
             authors=[a for a in authors if a],
             year=int(year) if year and year.isdigit() else None,
-            venue=venue,
             identifiers=idents,
             source=ExtractionSource.BBL,
-            extraction_confidence=confidence,
         ))
     return refs
 
@@ -229,9 +123,9 @@ def parse_biblatex_bbl(text: str) -> list[Reference]:
 # _BIBITEM_LABEL_RE = re.compile(r"\\bibitem\s*(?:\[([^\]]*)\])?\s*\{")
 #
 #
-# def detect_style(files: dict[str, str]) -> style.CitationStyle:
+# def detect_style(text: str) -> style.CitationStyle:
 #     """Classify the bibliography's citation convention, via the same
-#     shared classifier the PDF extractor uses (src/extract/style.py).
+#     shared classifier the PDF extractor uses (citebot/parse/style.py).
 #
 #     Only the natbib/plain dialect carries a usable signal: its optional
 #     \\bibitem[label]{key} argument holds "[Author, Year]" for author-year
@@ -241,7 +135,6 @@ def parse_biblatex_bbl(text: str) -> list[Reference]:
 #     citation style used to render them, so there's no ambiguity to
 #     resolve and detection is skipped.
 #     """
-#     text = _select_bibliography(files)
 #     if not text.strip() or "\\entry{" in text:
 #         return style.CitationStyle.UNKNOWN
 #
@@ -259,22 +152,10 @@ def parse_biblatex_bbl(text: str) -> list[Reference]:
 # --------------------------------------------------------------------------- #
 # Entry point
 # --------------------------------------------------------------------------- #
-def extract_from_files(files: dict[str, str]) -> list[Reference]:
-    text = _select_bibliography(files)
+def parse(text: str) -> list[Reference]:
+    """Dispatch raw .bbl text to the matching dialect parser."""
     if not text.strip():
         return []
     if "\\entry{" in text:  # biblatex dialect
         return parse_biblatex_bbl(text)
     return parse_bibitems(text)
-
-
-# def extract_verbose(arxiv_id: str) -> tuple[style.CitationStyle, list[Reference]]:
-#     """Like extract(), but also returns the detected citation style."""
-#     files = fetch_source_files(arxiv_id)
-#     return detect_style(files), extract_from_files(files)
-
-
-def extract(arxiv_id: str) -> list[Reference]:
-    """Public extractor: arXiv id -> normalized references."""
-    files = fetch_source_files(arxiv_id)
-    return extract_from_files(files)

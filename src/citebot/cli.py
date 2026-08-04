@@ -13,7 +13,7 @@ from pathlib import Path
 
 import typer
 
-from src.models import Reference
+from citebot.models import Reference
 
 app = typer.Typer(add_completion=False, help="Citation verification bot") # Typer CLI app object
 
@@ -29,12 +29,12 @@ def _detect_and_extract(source: str) -> tuple[str, list[Reference]]:
     # PDF
     p = Path(source)
     if source.lower().endswith(".pdf"):
-        from src.extract import pdf
+        from citebot.extract import pdf
         return "pdf", pdf.extract(p)
 
     #arXiv
     if _ARXIV_ID_RE.match(source):
-        from src.extract import arxiv
+        from citebot.extract import arxiv
         try:
             return "arxiv", arxiv.extract(source)
         except ValueError as e:

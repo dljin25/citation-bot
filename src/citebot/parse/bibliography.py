@@ -1,33 +1,18 @@
-"""Extract references from a NeurIPS paper PDF.
+"""Split raw bibliography text into entries and parse each into a Reference.
 
-NeurIPS papers are single-column with a numbered, natbib-style bibliography,
-so plain text extraction (no layout analysis needed) plus a "[n] ..." split
-is enough to isolate entries.
-
-The pipeline is three steps:
-    PDF -> full text -> just the bibliography -> one Reference per entry
-
-Multi-convention support (author-year, etc., picked via a shared style
-detector) was prototyped and is commented out below for now, bare-bones
-NeurIPS-numbered support only. Revisit later.
+Currently handles NeurIPS-style numbered ("[n] ...") bibliographies, the
+convention citebot.extract.pdf hands off here after isolating the References
+section of a paper. Multi-convention support (author-year, etc., picked via
+the shared style detector in citebot.parse.style) was prototyped and is
+commented out below for now. Revisit later.
 """
 
 from __future__ import annotations
 
-import re # regex
-from pathlib import Path
+import re
 
-from pypdf import PdfReader
-
-from src.extract import normalize
-# from src.extract import style  # only needed by the commented-out style-detection code below
-from src.models import ExtractionSource, Identifiers, Reference
-
-# regex patterns
-
-REFERENCES_HEADING = re.compile(r"^\s*references\s*$", re.IGNORECASE | re.MULTILINE)
-
-NEXT_SECTION_HEADING = re.compile(r"^\s*(appendix|checklist|supplementary material)\b", re.IGNORECASE | re.MULTILINE)
+from citebot.models import ExtractionSource, Identifiers, Reference
+from citebot.parse import normalize
 
 ENTRY_MARKER = re.compile(r"\[(\d+)\]")
 
@@ -41,27 +26,8 @@ SENTENCE_BREAK = re.compile(r"\.\s+(?=[A-Z])")
 #
 # YEAR_PAREN = re.compile(r"\(?(19[5-9]\d|20[0-4]\d)[a-z]?\)?")
 
-def _references_section(text: str) -> str:
-    """Return just the bibliography.
 
-    That is the text between the "References" heading and whichever section
-    comes after it. Returns "" if the paper has no References heading.
-    """
-    heading = REFERENCES_HEADING.search(text)
-    if not heading:
-        return ""
-
-    section = text[heading.end():]
-
-    # Stop at the next heading. If there isn't one, the bibliography runs
-    # to the end of the document.
-    next_heading = NEXT_SECTION_HEADING.search(section)
-    if not next_heading:
-        return section
-    return section[:next_heading.start()]
-
-
-def _split_entries(section: str) -> list[tuple[str, str]]:
+def split_entries(section: str) -> list[tuple[str, str]]:
     """Split the bibliography into (number, entry text) pairs.
 
     Each entry runs from its own "[n]" marker up to the next one, and the
@@ -88,7 +54,7 @@ def _split_entries(section: str) -> list[tuple[str, str]]:
     return entries
 
 
-def _parse_entry(number: str, raw: str) -> Reference:
+def parse_entry(number: str, raw: str) -> Reference:
 
     sentences = SENTENCE_BREAK.split(raw)
 
@@ -113,9 +79,14 @@ def _parse_entry(number: str, raw: str) -> Reference:
     )
 
 
+def parse(section: str) -> list[Reference]:
+    """Split a bibliography section and parse every entry."""
+    return [parse_entry(number, raw) for number, raw in split_entries(section)]
+
+
 # --------------------------------------------------------------------------- #
 # Multi-convention support (author-year splitting/parsing + shared style
-# detection) - commented out for now, bare-bones NeurIPS-only support below.
+# detection) - commented out for now, bare-bones NeurIPS-only support above.
 # Revisit later.
 # --------------------------------------------------------------------------- #
 #
@@ -186,7 +157,7 @@ def _parse_entry(number: str, raw: str) -> Reference:
 #     """Classify the bibliography's citation convention before splitting it.
 #
 #     Feeds candidate entry-leading snippets for both conventions through
-#     the shared classifier (src/extract/style.py) and majority-votes, since
+#     the shared classifier (citebot/parse/style.py) and majority-votes, since
 #     a document can contain a handful of spurious matches for the "wrong"
 #     convention (e.g. a URL fragment that looks like a bracketed number).
 #     """
@@ -200,17 +171,8 @@ def _parse_entry(number: str, raw: str) -> Reference:
 #     return style.dominant_style(numbered_markers + author_year_snippets)
 #
 #
-# def extract_verbose(pdf_path: str | Path) -> tuple[style.CitationStyle, list[Reference]]:
-#     """Like extract(), but also returns the detected citation style."""
-#     reader = PdfReader(str(pdf_path))
-#
-#     pages = []
-#     for page in reader.pages:
-#         # extract_text() returns None on pages with no text layer.
-#         pages.append(page.extract_text() or "")
-#     text = "\n".join(pages)
-#
-#     section = _references_section(text)
+# def parse_verbose(section: str) -> tuple[style.CitationStyle, list[Reference]]:
+#     """Like parse(), but also returns the detected citation style."""
 #     detected = _detect_style(section)
 #
 #     if detected == style.CitationStyle.AUTHOR_YEAR:
@@ -219,24 +181,6 @@ def _parse_entry(number: str, raw: str) -> Reference:
 #             for i, raw in enumerate(_split_author_year_entries(section), start=1)
 #         ]
 #     else:
-#         references = [_parse_entry(number, raw) for number, raw in _split_entries(section)]
+#         references = [parse_entry(number, raw) for number, raw in split_entries(section)]
 #
 #     return detected, references
-
-
-def extract(pdf_path: str | Path) -> list[Reference]:
-    """Read a paper PDF and return every reference in its bibliography."""
-    reader = PdfReader(str(pdf_path))
-
-    pages = []
-    for page in reader.pages:
-        # extract_text() returns None on pages with no text layer.
-        pages.append(page.extract_text() or "")
-    text = "\n".join(pages)
-
-    section = _references_section(text)
-
-    references = []
-    for number, raw in _split_entries(section):
-        references.append(_parse_entry(number, raw))
-    return references

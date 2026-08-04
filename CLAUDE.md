@@ -1,0 +1,4 @@
+# Working with David on this repo
+
+- Before implementing a fix (even when asked to "suggest ways" or when the fix seems small/obvious), present the options and wait for explicit approval before editing files. Don't jump straight from "suggest ways to fix X" into applying the change.
+- Always `conda activate cite` before running any Python/pip/pytest/citebot command in this repo — base/system Python lacks or has stale versions of the deps. In this harness, `conda shell.zsh hook` can fail silently with a permission error from a stale shell snapshot function; if so, use `source /opt/miniconda3/etc/profile.d/conda.sh && conda activate cite` instead, and verify with `python -c "import sys; print(sys.executable)"` (should print a path containing `envs/cite`) before trusting the result of any command.
