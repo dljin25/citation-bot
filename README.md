@@ -17,8 +17,8 @@ citebot extract 1706.03762
 ```
 
 Each `Reference` (defined in [`src/citebot/models/__init__.py`](src/citebot/models/__init__.py)) carries the raw
-citation string, parsed title/authors/year/venue, extracted identifiers
-(DOI/arXiv id/URL), and the extraction source + confidence.
+citation string, parsed title/authors/year/venue, and the extracted identifiers
+(DOI/arXiv id/URL). 
 
 ## Development
 
