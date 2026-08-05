@@ -5,26 +5,108 @@ convention citebot.extract.pdf hands off here after isolating the References
 section of a paper. Multi-convention support (author-year, etc., picked via
 the shared style detector in citebot.parse.style) was prototyped and is
 commented out below for now. Revisit later.
+
+Splitting each entry into title/authors/year is delegated to anystyle-cli (a
+CRF-based reference parser) rather than hand-written regex: citation
+formatting is inconsistent enough (missing delimiters between title and
+venue, periods inside author initials, etc.) that a period/capitalization
+heuristic mis-splits real entries. See notes.md.
 """
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
+import tempfile
+from pathlib import Path
+from typing import Optional
 
 from citebot.models import ExtractionSource, Identifiers, Reference
 from citebot.parse import normalize
 
 ENTRY_MARKER = re.compile(r"\[(\d+)\]")
 
-SENTENCE_BREAK = re.compile(r"\.\s+(?=[A-Z])")
+_DATE_YEAR = re.compile(r"\d{4}")
 
-# # An author-year entry starts at document start, or right after a sentence
-# # ending ("... 45-67. ") that is immediately followed by a capitalized
-# # surname and comma (e.g. "Smith, J. ..."). Mid-entry author lists don't
-# # trigger this because co-authors are joined by "," or " and ", not ". ".
-# AUTHOR_YEAR_BOUNDARY = re.compile(r"(?:^|\.\s+)(?=[A-Z][A-Za-z\-']+,\s)")
-#
-# YEAR_PAREN = re.compile(r"\(?(19[5-9]\d|20[0-4]\d)[a-z]?\)?")
+
+class AnystyleNotFoundError(RuntimeError):
+    """Raised when the anystyle-cli binary can't be located."""
+
+
+def _anystyle_bin() -> str:
+    """Locate the anystyle-cli executable.
+
+    `gem install anystyle-cli` on macOS system Ruby needs --user-install,
+    which lands in Gem.user_dir/bin - a path that's often not on PATH. Fall
+    back to asking Ruby for that directory before giving up.
+    """
+    found = shutil.which("anystyle")
+    if found:
+        return found
+
+    try:
+        user_dir = subprocess.run(
+            ["ruby", "-rrubygems", "-e", "print Gem.user_dir"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        candidate = Path(user_dir) / "bin" / "anystyle"
+        if candidate.exists():
+            return str(candidate)
+    except (OSError, subprocess.CalledProcessError):
+        pass
+
+    raise AnystyleNotFoundError(
+        "anystyle-cli not found. Install it with `gem install anystyle-cli` "
+        "(see README for setup)."
+    )
+
+
+def _run_anystyle(raw_entries: list[str]) -> list[dict]:
+    """Parse raw entry strings into anystyle's structured records, in order."""
+    if not raw_entries:
+        return []
+
+    with tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False) as f:
+        f.write("\n".join(raw_entries))
+        tmp_path = f.name
+
+    try:
+        result = subprocess.run(
+            [_anystyle_bin(), "--format", "json", "parse", tmp_path],
+            capture_output=True, text=True, check=True,
+        )
+    finally:
+        Path(tmp_path).unlink(missing_ok=True)
+
+    return json.loads(result.stdout)
+
+
+def _authors_from_record(record: dict) -> list[str]:
+    names = []
+    for author in record.get("author", []):
+        if "others" in author:
+            continue
+        name = " ".join(p for p in (author.get("given", ""), author.get("family", "")) if p)
+        if name:
+            names.append(name)
+    return names
+
+
+def _title_from_record(record: dict) -> Optional[str]:
+    titles = record.get("title")
+    if not titles:
+        return None
+    return normalize.clean_title(" ".join(titles))
+
+
+def _year_from_record(record: dict) -> Optional[int]:
+    for date in record.get("date", []):
+        match = _DATE_YEAR.search(date)
+        if match:
+            return int(match.group())
+    return None
 
 
 def split_entries(section: str) -> list[tuple[str, str]]:
@@ -54,22 +136,13 @@ def split_entries(section: str) -> list[tuple[str, str]]:
     return entries
 
 
-def parse_entry(number: str, raw: str) -> Reference:
-
-    sentences = SENTENCE_BREAK.split(raw)
-
-    authors = normalize.parse_authors(sentences[0])
-    if len(sentences) > 1:
-        title = normalize.clean_title(sentences[1])
-    else:
-        title = None
-
+def parse_entry(number: str, raw: str, record: dict) -> Reference:
     return Reference(
         ref_id=number,
         raw_string=raw,
-        title=title,
-        authors=authors,
-        year=normalize.extract_year(raw),
+        title=_title_from_record(record),
+        authors=_authors_from_record(record),
+        year=_year_from_record(record) or normalize.extract_year(raw),
         identifiers=Identifiers(
             doi=normalize.extract_doi(raw),
             arxiv_id=normalize.extract_arxiv_id(raw),
@@ -80,8 +153,13 @@ def parse_entry(number: str, raw: str) -> Reference:
 
 
 def parse(section: str) -> list[Reference]:
-    """Split a bibliography section and parse every entry."""
-    return [parse_entry(number, raw) for number, raw in split_entries(section)]
+    """Split a bibliography section and parse every entry via anystyle-cli."""
+    entries = split_entries(section)
+    records = _run_anystyle([raw for _, raw in entries])
+    return [
+        parse_entry(number, raw, record)
+        for (number, raw), record in zip(entries, records)
+    ]
 
 
 # --------------------------------------------------------------------------- #
