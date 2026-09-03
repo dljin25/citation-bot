@@ -21,9 +21,18 @@ from citebot.parse import bibliography
 
 # regex patterns
 
-REFERENCES_HEADING = re.compile(r"^\s*references\s*$", re.IGNORECASE | re.MULTILINE)
+REFERENCES_HEADING = re.compile(r"^\s*(?:\d+\.?\s+)?(references|bibliography)\s*$", re.IGNORECASE | re.MULTILINE)
 
+# The paper's own top-level banner for post-bibliography content: closed,
+# stable vocabulary (NeurIPS mandates "NeurIPS Paper Checklist" verbatim;
+# "Appendix"/"Supplementary Material" are the conventional banners before it).
 NEXT_SECTION_KEYWORD = re.compile(r"appendix|checklist|supplementary material", re.IGNORECASE)
+
+# Papers that skip the banner and open straight on a lettered appendix
+# section (LaTeX's \appendix restarts numbering as A, B, C, ...) - matches
+# e.g. "A Ethics Statement", "B Broader Impact and Limitations". Unlike
+# NEXT_SECTION_KEYWORD this doesn't need to know the section's name.
+LETTERED_SECTION_HEADING = re.compile(r"^[A-Z]\s+[A-Z][a-z]+(?:\s+[A-Za-z]+){0,6}\s*$", re.MULTILINE)
 
 PAGE_NUMBER_LINE = re.compile(r"^\s*\d{1,4}\s*$", re.MULTILINE)
 
@@ -42,7 +51,10 @@ def _references_section(text: str) -> str:
 
     for page_break in PAGE_NUMBER_LINE.finditer(section):
         window = section[page_break.end():page_break.end() + 120]
-        if NEXT_SECTION_KEYWORD.search(window): # NOTE: does not need to be the first word, so "NeurIPS Paper Checklist" is valid
+        # NOTE: keyword match does not need to be the first word, so
+        # "NeurIPS Paper Checklist" and "In this Supplementary Material" are
+        # both valid.
+        if NEXT_SECTION_KEYWORD.search(window) or LETTERED_SECTION_HEADING.search(window):
             return section[:page_break.start()]
 
     return section
