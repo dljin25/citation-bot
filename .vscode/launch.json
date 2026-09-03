@@ -1,0 +1,33 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "citebot extract <source>",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "/opt/miniconda3/envs/cite/bin/python",
+      "program": "/opt/miniconda3/envs/cite/bin/citebot",
+      "args": ["extract", "${input:source}"],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "citebot check <source>",
+      "type": "debugpy",
+      "request": "launch",
+      "python": "/opt/miniconda3/envs/cite/bin/python",
+      "program": "/opt/miniconda3/envs/cite/bin/citebot",
+      "args": ["check", "${input:source}"],
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ],
+  "inputs": [
+    {
+      "id": "source",
+      "type": "promptString",
+      "description": "arXiv id or path to .pdf",
+      "default": "test2.pdf"
+    }
+  ]
+}
