@@ -23,7 +23,9 @@ from citebot.parse import bibliography
 
 REFERENCES_HEADING = re.compile(r"^\s*references\s*$", re.IGNORECASE | re.MULTILINE)
 
-NEXT_SECTION_HEADING = re.compile(r"^\s*(appendix|checklist|supplementary material)\b", re.IGNORECASE | re.MULTILINE)
+NEXT_SECTION_KEYWORD = re.compile(r"appendix|checklist|supplementary material", re.IGNORECASE)
+
+PAGE_NUMBER_LINE = re.compile(r"^\s*\d{1,4}\s*$", re.MULTILINE)
 
 
 def _references_section(text: str) -> str:
@@ -38,12 +40,12 @@ def _references_section(text: str) -> str:
 
     section = text[heading.end():]
 
-    # Stop at the next heading. If there isn't one, the bibliography runs
-    # to the end of the document.
-    next_heading = NEXT_SECTION_HEADING.search(section)
-    if not next_heading:
-        return section
-    return section[:next_heading.start()]
+    for page_break in PAGE_NUMBER_LINE.finditer(section):
+        window = section[page_break.end():page_break.end() + 120]
+        if NEXT_SECTION_KEYWORD.search(window): # NOTE: does not need to be the first word, so "NeurIPS Paper Checklist" is valid
+            return section[:page_break.start()]
+
+    return section
 
 
 def extract(pdf_path: str | Path) -> list[Reference]:
