@@ -17,6 +17,31 @@ from citebot.models import Identifiers, Reference
 API = "https://api.openalex.org/works"
 
 
+class OpenAlexAuthError(RuntimeError):
+    """Raised when OpenAlex rejects the API key."""
+
+
+class OpenAlexUnreachableError(RuntimeError):
+    """Raised when OpenAlex can't be reached at all."""
+
+
+def verify_api_key(api_key: str, *, timeout: float = 15.0) -> None:
+    """Raise if the key is invalid or OpenAlex can't be reached.
+
+    A single cheap request so a bad key or a dead API fails once, up front,
+    instead of silently soft-failing on every one of a paper's references.
+    """
+    try:
+        with httpx.Client(timeout=timeout, params={"api_key": api_key}) as client:
+            client.get(API, params={"per_page": 1}).raise_for_status()
+    except httpx.HTTPStatusError as e:
+        if e.response.status_code == 401:
+            raise OpenAlexAuthError from e
+        raise OpenAlexUnreachableError from e
+    except httpx.HTTPError as e:
+        raise OpenAlexUnreachableError from e
+
+
 def resolve(ref: Reference, *, api_key: str, limit: int = 5, timeout: float = 15.0) -> list[Candidate]:
     with httpx.Client(timeout=timeout, params={"api_key": api_key}) as client:
         doi = ref.identifiers.doi or _arxiv_doi(ref.identifiers.arxiv_id)
@@ -45,7 +70,10 @@ def _get_by_doi(client: httpx.Client, doi: str) -> Optional[dict]:
 
 
 def _search_by_title(client: httpx.Client, title: str, *, limit: int) -> list[dict]:
-    resp = client.get(API, params={"search": title, "per_page": limit})
+    # title.search restricts matching to the title field, unlike the general
+    # `search` param (title+abstract+fulltext), which was burying exact
+    # title matches under topically-similar but unrelated papers.
+    resp = client.get(API, params={"filter": f"title.search:{title}", "per_page": limit})
     resp.raise_for_status()
     return resp.json().get("results", [])
 

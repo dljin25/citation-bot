@@ -19,6 +19,12 @@ app = typer.Typer(add_completion=False, help="Citation verification bot") # Type
 
 _ARXIV_ID_RE = re.compile(r"^\d{4}\.\d{4,5}(v\d+)?$|^[a-z\-]+(\.[A-Z]{2})?/\d{7}(v\d+)?$") # regex matcher for arXiv IDs
 
+_VERDICT_STYLE = {
+    "verified": ("✔", "green"),
+    "ambiguous": ("?", "yellow"),
+    "not_found": ("✘", "red"),
+}
+
 @app.callback()
 def _main() -> None:
     """Citation verification (subcommands: extract, ...)."""
@@ -60,7 +66,8 @@ def extract(
     # print extraction summary
 
     typer.echo(f"\nSource: {source}  (kind={kind})")
-    typer.echo(f"Extracted {len(refs)} references\n" + "=" * 70)
+    typer.secho(f"Extracted {len(refs)} references", bold=True)
+    typer.echo("=" * 70)
     typer.echo("")
 
     n_titled = sum(1 for r in refs if r.title)
@@ -73,9 +80,9 @@ def extract(
         if r.identifiers.doi:
             ids.append(f"doi:{r.identifiers.doi}")
         id_str = ("  [" + ", ".join(ids) + "]") if ids else ""
-        typer.echo(f"  title : {r.title!r}")
-        typer.echo(f"  auth  : {r.authors}")
-        typer.echo(f"  year  : {r.year} \n" )
+        typer.echo(f"  {typer.style('title', bold=True)} : {r.title!r}")
+        typer.echo(f"  {typer.style('auth', bold=True)}  : {r.authors}")
+        typer.echo(f"  {typer.style('year', bold=True)}  : {r.year} \n")
 
     typer.echo("=" * 70)
     typer.echo(
@@ -97,11 +104,19 @@ def check(
 
     from citebot import classify as classify_mod
     from citebot import crossref
+    from citebot.crossref import openalex
 
     typer.echo("OpenAlex requires a free API key (get one at https://openalex.org/settings/api).")
     api_key = typer.prompt("OpenAlex API key", hide_input=True)
     if not api_key:
         raise typer.BadParameter("An OpenAlex API key is required.")
+
+    try:
+        openalex.verify_api_key(api_key)
+    except openalex.OpenAlexAuthError:
+        raise typer.BadParameter("OpenAlex rejected this API key — get a valid one at https://openalex.org/settings/api")
+    except openalex.OpenAlexUnreachableError:
+        raise typer.BadParameter("OpenAlex is currently unreachable")
 
     kind, refs = _detect_and_extract(source)
 
@@ -113,19 +128,22 @@ def check(
         return r, resolution, classify_mod.classify(resolution)
 
     counts: dict[classify_mod.Verdict, int] = {v: 0 for v in classify_mod.Verdict}
+    source_errors = 0
     with ThreadPoolExecutor(max_workers=10) as executor:
         for r, resolution, verdict in executor.map(_resolve_and_classify, refs):
             counts[verdict] += 1
 
-            best = resolution.best
-            best_str = (
-                f"{best.title!r} ({best.source.value}, score={best.match_score:.2f})"
-                if best
-                else "no candidates found"
-            )
-            typer.echo(f"  [{verdict.value:10}] {r.title!r}")
-            typer.echo(f"               -> {best_str}")
+            symbol, color = _VERDICT_STYLE[verdict.value]
+            prefix = typer.style(f"{symbol} {verdict.value.upper():<10}", fg=color, bold=True)
+            typer.echo(f"{prefix} {r.title}")
+            if not resolution.sources_ok:
+                source_errors += 1
+                typer.secho("   ⚠ OpenAlex unreachable — not evidence of a bad citation", fg="bright_black")
+            typer.echo("")
 
-    typer.echo("\n" + "=" * 70)
-    summary = " | ".join(f"{v.value}={n}" for v, n in counts.items())
-    typer.echo(f"summary: {len(refs)} refs | {summary}")
+    typer.echo("=" * 70)
+    summary = " | ".join(
+        typer.style(f"{_VERDICT_STYLE[v.value][0]} {v.value}={n}", fg=_VERDICT_STYLE[v.value][1])
+        for v, n in counts.items()
+    )
+    typer.echo(f"summary: {len(refs)} refs | {summary} | source_errors={source_errors}")

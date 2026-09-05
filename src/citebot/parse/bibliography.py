@@ -109,6 +109,13 @@ def _year_from_record(record: dict) -> Optional[int]:
     return None
 
 
+def _venue_from_record(record: dict) -> Optional[str]:
+    venues = record.get("container-title")
+    if not venues:
+        return None
+    return " ".join(venues)
+
+
 def split_entries(section: str) -> list[tuple[str, str]]:
     """Split the bibliography into (number, entry text) pairs.
 
@@ -143,6 +150,7 @@ def parse_entry(number: str, raw: str, record: dict) -> Reference:
         title=_title_from_record(record),
         authors=_authors_from_record(record),
         year=_year_from_record(record) or normalize.extract_year(raw),
+        venue=_venue_from_record(record),
         identifiers=Identifiers(
             doi=normalize.extract_doi(raw),
             arxiv_id=normalize.extract_arxiv_id(raw),

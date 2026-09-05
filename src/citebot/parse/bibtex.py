@@ -76,7 +76,6 @@ def parse_biblatex_bbl(text: str) -> list[Reference]:
             return N.strip_latex(m.group(1)) if m else None
 
         title = N.clean_title(field("title") or "")
-        # not a Reference field; kept only to reconstruct raw_string below
         venue = field("journaltitle") or field("booktitle") or field("eventtitle")
         year = field("year")
         if not year:
@@ -109,6 +108,7 @@ def parse_biblatex_bbl(text: str) -> list[Reference]:
             title=title,
             authors=[a for a in authors if a],
             year=int(year) if year and year.isdigit() else None,
+            venue=venue,
             identifiers=idents,
             source=ExtractionSource.BBL,
         ))
