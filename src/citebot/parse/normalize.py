@@ -57,6 +57,11 @@ _ARXIV_BARE_RE = re.compile(r"\b(\d{4}\.\d{4,5})(v\d+)?\b")
 _DOI_RE = re.compile(r"\b(10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)\b")
 _URL_RE = re.compile(r"https?://[^\s,}{)\]]+", re.IGNORECASE)
 _YEAR_RE = re.compile(r"\b(19[5-9]\d|20[0-4]\d)\b")
+# A bibitem with no separate venue \newblock (e.g. a plain preprint/tech
+# report entry) leaves the year glued onto the title's own block, since
+# there's nothing else to hold it — matches only a trailing ", <year>",
+# never a year appearing elsewhere in a legitimate title.
+_TRAILING_YEAR_RE = re.compile(r",\s*(19[5-9]\d|20[0-4]\d)\.?\s*$")
 
 
 def extract_arxiv_id(s: str) -> Optional[str]:
@@ -149,6 +154,7 @@ def surname(name: str) -> str:
 # --------------------------------------------------------------------------- #
 def clean_title(s: str) -> Optional[str]:
     t = strip_latex(s).strip(" .")
+    t = _TRAILING_YEAR_RE.sub("", t).strip(" .,")
     if not t or len(t) < 3:
         return None
     return t

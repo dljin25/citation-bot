@@ -36,7 +36,7 @@ def resolve(ref: Reference, api_key: str) -> Resolution:
             continue  # one source being down/misbehaving shouldn't fail the whole resolution
         sources_ok.append(source)
         for candidate in found:
-            candidate.match_score = base.score(ref, candidate)
+            base.score(ref, candidate)
             candidates.append(candidate)
 
     candidates.sort(key=lambda c: c.match_score, reverse=True)

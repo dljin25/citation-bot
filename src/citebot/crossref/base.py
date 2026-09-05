@@ -33,6 +33,13 @@ class Candidate(BaseModel):
     venue: Optional[str] = None
     url: Optional[str] = None
     match_score: float = 0.0
+    # Sub-scores behind match_score, exposed so citebot.classify can reason about
+    # them individually (e.g. title matches but authors don't). author_score is
+    # None rather than 0.0 when either author list is empty — "no data to compare"
+    # is a different state from "compared and found no overlap".
+    title_score: float = 0.0
+    author_score: Optional[float] = None
+    year_score: float = 0.0
 
 
 class Resolution(BaseModel):
@@ -58,24 +65,23 @@ class Resolver(Protocol):
 # Scoring
 # --------------------------------------------------------------------------- #
 
-def score(ref: Reference, candidate: Candidate) -> float:
-    """How confident we are that candidate is the same paper as ref, 0..1.
+def score(ref: Reference, candidate: Candidate) -> None:
+    """Score how confident we are that candidate is the same paper as ref, 0..1.
 
-    An exact DOI or arXiv id match is treated as certain. Otherwise blend
-    title similarity (most reliable signal), author overlap, and year
-    closeness.
+    Writes the breakdown (title_score, author_score, year_score, match_score)
+    onto candidate. An exact DOI/arXiv id match means candidate is genuinely
+    the work at that identifier, not that its metadata is honest — title,
+    authors, and year are compared the same way regardless of how the
+    candidate was found, so a right-id-wrong-paper case still scores low.
     """
-    ids = ref.identifiers
-    if ids.doi and ids.doi == candidate.identifiers.doi:
-        return 1.0
-    if ids.arxiv_id and ids.arxiv_id == candidate.identifiers.arxiv_id:
-        return 1.0
+    candidate.title_score = title_similarity(ref.title, candidate.title)
+    candidate.author_score = author_overlap(ref.authors, candidate.authors)
+    candidate.year_score = 1.0 if year_match(ref.year, candidate.year) else 0.0
 
-    title_score = title_similarity(ref.title, candidate.title)
-    author_score = author_overlap(ref.authors, candidate.authors)
-    year_score = 1.0 if year_match(ref.year, candidate.year) else 0.0
-
-    return 0.6 * title_score + 0.25 * author_score + 0.15 * year_score
+    author_component = candidate.author_score if candidate.author_score is not None else 0.0
+    candidate.match_score = (
+        0.6 * candidate.title_score + 0.25 * author_component + 0.15 * candidate.year_score
+    )
 
 
 def title_similarity(a: Optional[str], b: Optional[str]) -> float:
@@ -85,12 +91,13 @@ def title_similarity(a: Optional[str], b: Optional[str]) -> float:
     return SequenceMatcher(None, _normalize_title(a), _normalize_title(b)).ratio()
 
 
-def author_overlap(a: list[str], b: list[str]) -> float:
-    """Fraction of surnames shared between two author lists, 0..1."""
+def author_overlap(a: list[str], b: list[str]) -> Optional[float]:
+    """Fraction of surnames shared between two author lists, 0..1, or None if
+    either list is empty (nothing to compare, not "no overlap")."""
     surnames_a = {_surname(name) for name in a}
     surnames_b = {_surname(name) for name in b}
     if not surnames_a or not surnames_b:
-        return 0.0
+        return None
     return len(surnames_a & surnames_b) / len(surnames_a | surnames_b)
 
 

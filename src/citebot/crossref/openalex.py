@@ -7,6 +7,7 @@ citebot.crossref.base score the results.
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 import httpx
@@ -69,11 +70,22 @@ def _get_by_doi(client: httpx.Client, doi: str) -> Optional[dict]:
     return resp.json()
 
 
+_FILTER_BREAKING_CHARS = re.compile(r"[,?*]")
+
+
 def _search_by_title(client: httpx.Client, title: str, *, limit: int) -> list[dict]:
     # title.search restricts matching to the title field, unlike the general
     # `search` param (title+abstract+fulltext), which was burying exact
     # title matches under topically-similar but unrelated papers.
-    resp = client.get(API, params={"filter": f"title.search:{title}", "per_page": limit})
+    #
+    # `,` splits OpenAlex's filter= value into separate filters, and `?`/`*`
+    # are wildcard operators not allowed on this stemmed field — both make
+    # OpenAlex reject the request outright (HTTP 400). Properly escaping
+    # them is possible but fights httpx's automatic query encoding; since
+    # title.search already does fuzzy, stemmed token matching (not literal
+    # string matching), dropping this punctuation costs no real precision.
+    query = _FILTER_BREAKING_CHARS.sub(" ", title)
+    resp = client.get(API, params={"filter": f"title.search:{query}", "per_page": limit})
     resp.raise_for_status()
     return resp.json().get("results", [])
 

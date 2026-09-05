@@ -27,6 +27,15 @@ def test_identifier_extraction():
     assert N.extract_year("In Proc. NeurIPS, 2021.") == 2021
 
 
+def test_clean_title_strips_glued_on_year():
+    # A bibitem with no separate venue \newblock leaves the year glued onto
+    # the title block itself.
+    assert N.clean_title("Gradient flow in recurrent nets, 2001") == "Gradient flow in recurrent nets"
+    assert N.clean_title("Gradient flow in recurrent nets, 2001.") == "Gradient flow in recurrent nets"
+    # A year-shaped number that isn't a trailing ", <year>" shouldn't be touched.
+    assert N.clean_title("Report on the 2018-2020 census, methodology") == "Report on the 2018-2020 census, methodology"
+
+
 def test_parse_authors_variants():
     assert N.parse_authors("Yann LeCun and Yoshua Bengio") == ["Yann LeCun", "Yoshua Bengio"]
     a = N.parse_authors("Vaswani, Ashish, Shazeer, Noam and Parmar, Niki")

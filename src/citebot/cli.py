@@ -22,7 +22,12 @@ _ARXIV_ID_RE = re.compile(r"^\d{4}\.\d{4,5}(v\d+)?$|^[a-z\-]+(\.[A-Z]{2})?/\d{7}
 _VERDICT_STYLE = {
     "verified": ("✔", "green"),
     "ambiguous": ("?", "yellow"),
-    "not_found": ("✘", "red"),
+    "conflict": ("✘", "red"),
+}
+
+_CONFLICT_REASON_TEXT = {
+    "no_candidate": "no matching work found",
+    "author_mismatch": "title matches, but authors don't",
 }
 
 @app.callback()
@@ -130,12 +135,24 @@ def check(
     counts: dict[classify_mod.Verdict, int] = {v: 0 for v in classify_mod.Verdict}
     source_errors = 0
     with ThreadPoolExecutor(max_workers=10) as executor:
-        for r, resolution, verdict in executor.map(_resolve_and_classify, refs):
+        for r, resolution, classification in executor.map(_resolve_and_classify, refs):
+            verdict = classification.verdict
             counts[verdict] += 1
 
             symbol, color = _VERDICT_STYLE[verdict.value]
             prefix = typer.style(f"{symbol} {verdict.value.upper():<10}", fg=color, bold=True)
             typer.echo(f"{prefix} {r.title}")
+            if classification.reason is not None:
+                if classification.reason == classify_mod.ConflictReason.AUTHOR_MISMATCH:
+                    best = resolution.best
+                    authors = ", ".join(best.authors) if best.authors else "unknown authors"
+                    year = best.year if best.year else "unknown year"
+                    typer.secho(
+                        f'   found: "{best.title}" by {authors} ({year}) — {_CONFLICT_REASON_TEXT[classification.reason.value]}',
+                        fg=color,
+                    )
+                else:
+                    typer.secho(f"   {_CONFLICT_REASON_TEXT[classification.reason.value]}", fg=color)
             if not resolution.sources_ok:
                 source_errors += 1
                 typer.secho("   ⚠ OpenAlex unreachable — not evidence of a bad citation", fg="bright_black")
